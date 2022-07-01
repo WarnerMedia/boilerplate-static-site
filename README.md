@@ -57,3 +57,7 @@ This repository should never be used directly, the "Use this template" button sh
 # License
 
 This repository is released under [the MIT license](https://en.wikipedia.org/wiki/MIT_License).  View the [local license file](./LICENSE).
+
+# Test
+
+This is a test to make sure that the CLA Assistant is working as needed.
