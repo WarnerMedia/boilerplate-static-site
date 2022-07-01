@@ -1,0 +1,19 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create a new origin access identity (OAI) for S3 - (v1.0.0)"
+Resources:
+  CloudFrontOriginAccessIdentity:
+    Type: "AWS::CloudFront::CloudFrontOriginAccessIdentity"
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: "Origin Access Identity for S3"
+Outputs:
+  OriginAccessIdentity:
+    Description: "The origin access identity."
+    Value: !Ref CloudFrontOriginAccessIdentity
+    Export:
+      Name: !Sub "${AWS::StackName}-OriginAccessIdentity"
+  S3CanonicalUserId:
+    Description: "The Amazon S3 canonical user ID for the origin access identity."
+    Value: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+    Export:
+      Name: !Sub "${AWS::StackName}-S3CanonicalUserId"

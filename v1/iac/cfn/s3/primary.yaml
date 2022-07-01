@@ -1,0 +1,530 @@
+AWSTemplateFormatVersion: "2010-09-09" #The Format Version is optional.
+Description: "Create a bucket, IAM accounts, and needed IAM permissions for a bucket. (v1.2.1)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  # Bucket Configuration
+  BucketBaseName:
+    Type: "String"
+    Description: "The bucket base name."
+  BucketObjectExpirationInDays:
+    Type: "Number"
+    Description: "The default age of certain objects before they are automatically deleted from the bucket."
+    Default: 32
+  IntelligentTieringTransitionInDays:
+    Type: "Number"
+    Description: "The days after object creation before the transition happens."
+    Default: 0
+  ReplicationBucketArn:
+    Type: "String"
+    Description: "Which bucket are we replicating to?"
+  S3CanonicalUserId:
+    Type: "String"
+    Description: "The CloudFront origin access identity (OAI) for S3."
+  # User Configuration
+  UserPath:
+    Type: "String"
+    Description: "The path for the IAM service users."
+    Default: "/"
+  UserOneNameSuffix:
+    Type: "String"
+    Description: "The first user suffix for the share bucket."
+    Default: "general"
+  UserTwoNameSuffix:
+    Type: "String"
+    Description: "The second user suffix for the share bucket.  NOTE: If you change this, make sure to update the replication bucket template as well."
+    Default: "cdn"
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+    Default: "nonprod"
+Resources:
+  ReplicationRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - "s3.amazonaws.com"
+          Action:
+          - "sts:AssumeRole"
+      Policies:
+      - PolicyName: "ReplicationPolicy"
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: "Allow"
+            Action:
+            - "s3:Get*"
+            - "s3:ListBucket"
+            Resource:
+            - !Sub "arn:aws:s3:::{{resolve:ssm:/account/name}}-${BucketBaseName}-${AWS::Region}"
+            - !Sub "arn:aws:s3:::{{resolve:ssm:/account/name}}-${BucketBaseName}-${AWS::Region}/*"
+          - Effect: "Allow"
+            Action:
+            - "s3:ReplicateObject"
+            - "s3:ReplicateDelete"
+            - "s3:ReplicateTags"
+            - "s3:GetObjectVersionTagging"
+            Resource: !Sub
+            - "${BucketArn}/*"
+            - BucketArn: !Ref ReplicationBucketArn
+      Tags:
+      - Key: "Name"
+        Value: !Sub "${BucketBaseName}-${AWS::AccountId}-${AWS::Region}-replication-role"
+      - Key: "application"
+        Value: !Sub "${BucketBaseName}-${AWS::AccountId}-${AWS::Region}-replication-role"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "{{resolve:ssm:/account/name}}-${BucketBaseName}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: "AES256"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+            - "*"
+            AllowedMethods:
+            - "GET"
+            - "HEAD"
+            AllowedOrigins:
+            - "*"
+            Id: "AllowGet"
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+        - Id: "DefaultObjectMaxAge"
+          Prefix: ""
+          Status: "Enabled"
+          AbortIncompleteMultipartUpload:
+            DaysAfterInitiation: !Ref BucketObjectExpirationInDays
+          NoncurrentVersionExpirationInDays: !Ref BucketObjectExpirationInDays
+        - Id: "IntelligentTiering"
+          Status: "Enabled"
+          Transition:
+            StorageClass: "INTELLIGENT_TIERING"
+            TransitionInDays: !Ref IntelligentTieringTransitionInDays
+      LoggingConfiguration:
+        DestinationBucketName: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/logging/server-access/name}}"
+        LogFilePrefix: !Sub "${BucketBaseName}-${AWS::AccountId}-${AWS::Region}/"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      ReplicationConfiguration:
+        Role: !GetAtt ReplicationRole.Arn
+        Rules:
+        - Destination:
+            Bucket: !Ref ReplicationBucketArn
+          Prefix: ""
+          Status: "Enabled"
+      VersioningConfiguration:
+        Status: "Enabled"
+      Tags:
+      - Key: "Name"
+        Value: !Sub "${BucketBaseName}-${AWS::AccountId}-${AWS::Region}-bucket"
+      - Key: "application"
+        Value: !Sub "${BucketBaseName}-${AWS::AccountId}-${AWS::Region}-bucket"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  UserOne:
+    Type: "AWS::IAM::User"
+    Properties:
+      UserName: !Sub "srv_bucket_${BucketBaseName}_${UserOneNameSuffix}"
+      Path: !Ref UserPath
+      Tags:
+      - Key: "Name"
+        Value: !Sub "${BucketBaseName}-user-${UserOneNameSuffix}-${TagEnvironment}"
+      - Key: "application"
+        Value: !Sub "${BucketBaseName}-user-${UserOneNameSuffix}-${TagEnvironment}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  UserTwo:
+    Type: "AWS::IAM::User"
+    Properties:
+      UserName: !Sub "srv_bucket_${BucketBaseName}_${UserTwoNameSuffix}"
+      Path: !Ref UserPath
+      Tags:
+      - Key: "Name"
+        Value: !Sub "${BucketBaseName}-user-${UserTwoNameSuffix}-${TagEnvironment}"
+      - Key: "application"
+        Value: !Sub "${BucketBaseName}-user-${UserTwoNameSuffix}-${TagEnvironment}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  PolicyOne:
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      ManagedPolicyName: !Sub "srv_${BucketBaseName}_${UserOneNameSuffix}"
+      Users:
+      - Ref: UserOne
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Sid: "BucketList"
+          Effect: "Allow"
+          Action: "s3:ListAllMyBuckets"
+          Resource: "*"
+        - Sid: "FullBucketAccess"
+          Effect: "Allow"
+          Resource: !GetAtt Bucket.Arn
+          Action:
+          - "s3:*"
+        - Sid: "DenyPublicAccessBlock"
+          Effect: "Deny"
+          Resource: !GetAtt Bucket.Arn
+          Action:
+          - "s3:GetAccountPublicAccessBlock"
+          - "s3:PutAccountPublicAccessBlock"
+          - "s3:GetBucketPolicyStatus"
+          - "s3:GetBucketPublicAccessBlock"
+          - "s3:PutBucketPublicAccessBlock"
+  PolicyTwo:
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      ManagedPolicyName: !Sub "srv_${BucketBaseName}_${UserTwoNameSuffix}"
+      Users:
+      - Ref: UserTwo
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Sid: "GeneralBucketAccess"
+          Effect: "Allow"
+          Resource: !GetAtt Bucket.Arn
+          Action:
+          - "s3:DeleteObject*"
+          - "s3:GetObject*"
+          - "s3:ListBucket*"
+          - "s3:PutObject*"
+        - Sid: "ReplicationReadBucketAccess"
+          Effect: "Allow"
+          Resource: !Ref ReplicationBucketArn
+          Action:
+          - "s3:GetObject*"
+        - Sid: "DenyPublicAccessBlock"
+          Effect: "Deny"
+          Resource: !GetAtt Bucket.Arn
+          Action:
+          - "s3:GetAccountPublicAccessBlock"
+          - "s3:PutAccountPublicAccessBlock"
+          - "s3:GetBucketPolicyStatus"
+          - "s3:GetBucketPublicAccessBlock"
+          - "s3:PutBucketPublicAccessBlock"
+  BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: !Ref Bucket
+        Statement:
+        - Sid: "FullAccess"
+          Effect: "Allow"
+          Principal: "*"
+          Action:
+          - "s3:*"
+          Resource:
+          - !Sub "${Bucket.Arn}"
+          - !Sub "${Bucket.Arn}/*"
+          Condition:
+            StringEquals:
+              aws:arn:
+              - !GetAtt UserOne.Arn
+        - Sid: "ReadWriteAccess"
+          Effect: "Allow"
+          Principal: "*"
+          Action:
+          - "s3:DeleteObject*"
+          - "s3:GetObject*"
+          - "s3:ListBucket*"
+          - "s3:PutObject*"
+          Resource:
+          - !Sub "${Bucket.Arn}"
+          - !Sub "${Bucket.Arn}/*"
+          Condition:
+            StringEquals:
+              aws:arn:
+              - !GetAtt UserTwo.Arn
+        - Sid: "CloudFrontAccess"
+          Effect: "Allow"
+          Principal:
+            CanonicalUser: !Ref S3CanonicalUserId
+          Action:
+          - "s3:GetObject"
+          Resource: !Sub "${Bucket.Arn}/*" 
+  # SSM Parameters
+  ParamUserOne:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The first user."
+      Name: !Sub "/iam/${InfrastructureName}/user/${BucketBaseName}/one/name"
+      Tier: "Standard"
+      Type: "String"
+      Value: !Ref UserOne
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamUserOneArn:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The ARN of the first user."
+      Name: !Sub "/iam/${InfrastructureName}/user/${BucketBaseName}/one/arn"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt UserOne.Arn
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamUserTwo:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The second user."
+      Name: !Sub "/iam/${InfrastructureName}/user/${BucketBaseName}/two/name"
+      Tier: "Standard"
+      Type: "String"
+      Value: !Ref UserTwo
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamUserTwoArn:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The ARN of the second user."
+      Name: !Sub "/iam/${InfrastructureName}/user/${BucketBaseName}/two/arn"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt UserTwo.Arn
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamBucket:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The bucket name."
+      Name: !Sub "/s3/${InfrastructureName}/bucket/${BucketBaseName}/primary/name"
+      Tier: "Standard"
+      Type: "String"
+      Value: !Ref Bucket
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamBucketArn:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description:  "The bucket ARN."
+      Name: !Sub "/s3/${InfrastructureName}/bucket/${BucketBaseName}/primary/arn"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt Bucket.Arn
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+Outputs:
+  UserPath:
+    Description: "The IAM path for the users."
+    Value: !Ref UserPath
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPath"
+  UserOne:
+    Description: "The first user."
+    Value: !Ref UserOne
+    Export:
+      Name: !Sub "${AWS::StackName}-UserOne"
+  UserTwo:
+    Description: "The second user."
+    Value: !Ref UserTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-UserTwo"
+  UserOneArn:
+    Description: "The ARN of the first user."
+    Value: !GetAtt UserOne.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UserOneArn"
+  UserTwoArn:
+    Description: "The ARN of the second user."
+    Value: !GetAtt UserTwo.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UserTwoArn"
+  PolicyOneArn:
+    Description: "The ARN of the first policy."
+    Value: !Ref PolicyOne
+    Export:
+      Name: !Sub "${AWS::StackName}-PolicyOneArn"
+  PolicyTwoArn:
+    Description: "The ARN of the second policy."
+    Value: !Ref PolicyTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-PolicyTwoArn"
+  Bucket:
+    Description: "The bucket name."
+    Value: !Ref Bucket
+    Export:
+      Name: !Sub "${AWS::StackName}-Bucket"
+  BucketArn:
+    Description: "The bucket ARN."
+    Value: !GetAtt Bucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketArn"
+  BucketDomainName:
+    Description: "The bucket domain name."
+    Value: !GetAtt Bucket.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketDomainName"
+  BucketDualStackDomainName:
+    Description: "The bucket dual-stack domain name."
+    Value: !GetAtt Bucket.DualStackDomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketDualStackDomainName"
+  BucketRegionalDomainName:
+    Description: "The bucket regional domain name."
+    Value: !GetAtt Bucket.RegionalDomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketRegionalDomainName"
+  ParamUserOne:
+    Description: "The first user SSM Parameter."
+    Value: !Ref ParamUserOne
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamUserOne"
+  ParamUserTwo:
+    Description: "The second user SSM Parameter."
+    Value: !Ref ParamUserTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamUserTwo"
+  ParamUserOneArn:
+    Description: "The ARN of the first user SSM Parameter."
+    Value: !Ref ParamUserOneArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamUserOneArn"
+  ParamUserTwoArn:
+    Description: "The ARN of the second user SSM Parameter."
+    Value: !Ref ParamUserTwoArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamUserTwoArn"
+  ParamBucket:
+    Description: "The bucket name SSM Parameter."
+    Value: !Ref ParamBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamBucket"
+  ParamBucketArn:
+    Description: "The ARN of bucket SSM Parameter."
+    Value: !Ref ParamBucketArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamBucketArn"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+    - Label:
+        default: "Bucket Configuration"
+      Parameters:
+      - BucketBaseName
+      - S3CanonicalUserId
+    - Label:
+        default: "User Configuration"
+      Parameters:
+      - UserPath
+      - UserOneNameSuffix
+      - UserTwoNameSuffix
+    - Label:
+        default: "LifeCycle Configuration"
+      Parameters:
+      - BucketObjectExpirationInDays
+      - IntelligentTieringTransitionInDays
+    - Label:
+        default: "Replication Configuration"
+      Parameters:
+      - ReplicationBucketArn
+    - Label:
+        default: "Tags"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      # General Configuration
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      BucketBaseName:
+        default: "Bucket Base Name:"
+      S3CanonicalUserId:
+        default: "S3 Canonical User ID:"
+      UserPath:
+        default: "User Path:"
+      UserOneNameSuffix:
+        default: "First User Name:"
+      UserTwoNameSuffix:
+        default: "Second User Name:"
+      BucketObjectExpirationInDays:
+        default: "Bucket Object Expiration (In Days):"
+      IntelligentTieringTransitionInDays:
+        default: "Intelligent Tiering Transition (In Days):"
+      ReplicationBucketArn:
+        default: "Replication Bucket ARN:"
+      TagEnvironment:
+        default: "Environment:"

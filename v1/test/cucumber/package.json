@@ -1,0 +1,22 @@
+{
+  "name": "boilerplate-static-site",
+  "version": "1.0.0",
+  "description": "Cucumber tests for this static site.",
+  "repository": {
+    "type": "git"
+  },
+  "scripts": {
+    "test-app": "./node_modules/.bin/cucumber-js --format json:./output/results.json ./app/**/*.feature",
+    "test-infrastructure": "./node_modules/.bin/cucumber-js --format json:./output/results.json ./infrastructure/**/*.feature"
+  },
+  "author": "Warner Media, LLC",
+  "license": "MIT",
+  "dependencies": {
+  },
+  "devDependencies": {
+    "cucumber": "^6.0.5",
+    "dns": "^0.2.2",
+    "got": "^10.5.7",
+    "is-http2": "^1.2.0"
+  }
+}

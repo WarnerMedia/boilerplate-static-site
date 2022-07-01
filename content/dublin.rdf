@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc= "http://purl.org/dc/elements/1.1/">
+  <rdf:Description rdf:about="http://www.example.com/">
+    <dc:contributor>Warner Bros. Discovery</dc:contributor>
+    <dc:date>2022-06-25</dc:date>
+    <dc:description>This is an example simple static site.</dc:description>
+    <dc:language>EN</dc:language>
+    <dc:publisher>Warner Bros. Discovery</dc:publisher>
+    <dc:source>http://www.example.com/</dc:source>
+  </rdf:Description>
+</rdf:RDF>

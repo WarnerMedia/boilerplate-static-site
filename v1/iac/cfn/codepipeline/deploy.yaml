@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create the CodePipeline needed to deploy the static content - (v1.0.0)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  ProjectName:
+    Type: "String"
+    Description: "The specific name of the CodePipeline project."
+  # CodePipeline Notification Configuration
+  EnableNotifications:
+    Type: "String"
+    Description: "Should an e-mail SNS topic and Slack notification hook be enabled?  Please note this will only work the the Slack notifications Lambda has already been created for this region."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  SlackNotificationLambda:
+    Type: "String"
+    Description: "What is the name of the function used to send out Slack notifications?"
+    Default: "codepipeline-slack-notification-prod"
+  # Source Configuration
+  SourceFolder:
+    Type: "String"
+    Description: "The name of the source folder."
+    Default: "base"
+  ContentSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the content source."
+  ContentSourcePollForChanges:
+    Type: "String"
+    Description: "Should the CodePipeline poll for Lambda source file changes?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  # Deployment Configuration
+  BasePath:
+    Type: "String"
+    Description: "The base base that should be added for the extracted files."
+    Default: ""
+  DeploymentBucketName:
+    Type: "String"
+    Description: "The name of the bucket that the content files should be deployed to."
+  CacheControl:
+    Type: "String"
+    Description: "The Cache-Control header value applied to all extracted files."
+    Default: "max-age=60, public"
+  ExtractFiles:
+    Type: "String"
+    Description: "Should the files from the content ZIP be extracted to S3?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+    AllowedValues:
+    - "dev"
+    - "int"
+    - "qa"
+    - "stage"
+    - "nonprod"
+    - "prod"
+    Default: "nonprod"
+Conditions:
+  BasePath: !Not [ !Equals [ !Ref BasePath, "" ] ]
+  CacheControl: !Not [ !Equals [ !Ref CacheControl, "" ] ]
+  EnableNotifications: !Equals [ !Ref EnableNotifications, "Yes" ]
+  ExtractFiles: !Equals [ !Ref ExtractFiles, "Yes" ]
+  ContentSourcePollForChanges: !Equals [ !Ref ContentSourcePollForChanges, "Yes" ]
+Resources:
+  CodePipelineEventsRule:
+    Type: "AWS::Events::Rule"
+    Condition: EnableNotifications
+    Properties:
+      Name: !Sub "codepipeline-${ProjectName}-${TagEnvironment}"
+      Description: !Sub 'Events rule for e-mail and Slack notifications for the "${ProjectName}-${TagEnvironment}" CodePipeline.'
+      State: "ENABLED"
+      EventPattern:
+        source:
+        - "aws.codepipeline"
+        detail-type: # The following targets just the main CodePipeline states, you can also target individual stages (CodePipeline Stage Execution State Change) or actions (CodePipeline Action Execution State Change)
+        - "CodePipeline Pipeline Execution State Change"
+        # - "CodePipeline Stage Execution State Change"
+        # - "CodePipeline Action Execution State Change"
+        detail:
+          state: # These are the CodePipeline states: CANCELED, FAILED, RESUMED, STARTED, SUCCEEDED, and SUPERSEDED: https://docs.aws.amazon.com/codepipeline/latest/userguide/detect-state-changes-cloudwatch-events.html
+          - "CANCELED"
+          - "FAILED"
+          - "STARTED"
+          - "SUCCEEDED"
+          pipeline:
+          - !Sub "${ProjectName}-${TagEnvironment}"
+      Targets:
+      - Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${SlackNotificationLambda}"
+        Id: !Sub "slack-lambda-${ProjectName}-${TagEnvironment}"
+  CodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+      Name: !Sub "${ProjectName}-${TagEnvironment}"
+      RestartExecutionOnUpdate: true
+      ArtifactStores:
+      - Region: "us-east-1"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-1"
+      - Region: "us-east-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-2"
+      - Region: "us-west-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-west-2"
+      Stages:
+      - Name: "Source"
+        Actions:
+        - Name: "Content_Source"
+          Namespace: "Content"
+          ActionTypeId:
+            Category: "Source"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            S3Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            S3ObjectKey: !Sub "${ProjectName}/${SourceFolder}/${ContentSourceFile}"
+            PollForSourceChanges: !If [ ContentSourcePollForChanges, "true", "false" ]
+          OutputArtifacts:
+          - Name: "CONTENT_SOURCE_FILES"
+          RunOrder: 1
+      - Name: "Deploy"
+        Actions:
+        - Name: "Content_Deploy"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            BucketName: !Ref DeploymentBucketName
+            CacheControl: !If [ CacheControl, !Ref CacheControl, !Ref "AWS::NoValue" ]
+            Extract: !If [ ExtractFiles, true, false ]
+            ObjectKey: !If [ BasePath, !Ref BasePath, !Ref "AWS::NoValue" ]
+          InputArtifacts:
+          - Name: "CONTENT_SOURCE_FILES"
+          RunOrder: 1
+          Region: !Ref "AWS::Region"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+Outputs:
+  CodePipeline:
+    Description: "The pipeline project created."
+    Value: !Ref CodePipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-CodePipeline"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+    - Label:
+        default: "CodePipeline Configuration"
+      Parameters:
+      - ProjectName
+    - Label:
+        default: "CodePipeline Notification Configuration"
+      Parameters:
+      - EnableNotifications
+      - ExtractFiles
+      - SlackNotificationLambda
+    - Label:
+        default: "Source Configuration"
+      Parameters:
+      - SourceFolder
+      - ContentSourceFile
+      - ContentSourcePollForChanges
+    - Label:
+        default: "Deployment Configuration"
+      Parameters:
+      - DeploymentBucketName
+      - BasePath
+      - CacheControl
+      - ExtractFiles
+    - Label:
+        default: "Tags"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      # General Configuration
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      ProjectName:
+        default: "CodePipeline Project Name:"
+      # CodePipeline Notification Configuration
+      EnableNotifications:
+        default: "Enable E-mail and Slack Notifications:"
+      SlackNotificationLambda:
+        default: "Slack Notification Lambda Name:"
+      # Source Configuration
+      SourceFolder:
+        default: "Source Folder:"
+      ContentSourceFile:
+        default: "Service Source File:"
+      ContentSourcePollForChanges:
+        default: "Poll for Source Changes:"
+      # Deployment Configuration
+      BasePath:
+        default: "Base Path:"
+      DeploymentBucketName:
+        default: "Deployment Bucket Name:"
+      CacheControl:
+        default: "Cache Control Header:"
+      ExtractFiles:
+        default: "Extract Files:"
+      # Tags
+      TagEnvironment:
+        default: "Environment:"

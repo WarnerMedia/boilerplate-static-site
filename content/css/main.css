@@ -1,0 +1,32 @@
+html {
+  font-family: arial, sans-serif;
+}
+
+body {
+  background-color: white;
+}
+
+h1, h2, .content {
+  text-align: center;
+}
+
+img {
+  float: left;
+  padding: 10px;
+}
+
+.main {
+  max-width: 600px;
+  margin: auto;
+}
+
+.clearfix:after {
+  content: "";
+  clear: both;
+  display: table;
+}
+
+.center {
+  max-width: 224px;
+  margin: auto;
+}
